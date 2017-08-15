@@ -4,13 +4,13 @@ path.append("lib/")
 from pyspark import SparkContext
 from pyspark.sql import SQLContext
 from pyspark.sql.types import StringType
-from pyspark.sql.functions import col, split, udf, coalesce, lag, lit, sum as pyspark_sum, countDistinct, count
+from pyspark.sql.functions import col, split, udf, coalesce, lag, lit, sum as pyspark_sum, countDistinct, desc, dense_rank
 from pyspark.sql.window import Window
 import schema_builder
 from user_agents import parse as parse_user_agent
 
 
-WINDOW_SIZE = 900
+WINDOW_SIZE = 900  # 15 minutes
 
 
 def extract_browser_and_version(user_agent):
@@ -55,27 +55,45 @@ session = pyspark_sum(indicator).over(window).alias("session")
 data_frame = data_frame.select("*", session)
 ####################################################################
 
+
 # Count By Sessions
 print(
   "Count By Sessions are: \n",
-  data_frame.groupBy("session").count().collect()
+  data_frame.groupBy("session")
+            .count()
+            .collect()
 )
+
 
 # Average Session Time
 data_frame = data_frame.withColumn("marginal_session_time", diff)
 print(
   "Average Session Time is: \n",
-  data_frame.groupBy("session").avg("marginal_session_time").collect()
+  data_frame.groupBy("session")
+            .avg("marginal_session_time")
+            .collect()
 )
+
 
 # Distinct Users by Session
 print(
   "Distinct Users by Session are: \n",
-  data_frame.groupBy("session").agg(countDistinct("client_ip", "browser_ver")).collect()
+  data_frame.groupBy("session")
+            .agg(countDistinct("client_ip", "browser_ver"))
+            .collect()
 )
 
+
 # Unique Users With The Longest Session Time
+data_frame = (
+  data_frame.groupBy("session", "client_ip", "browser_ver")
+            .agg(pyspark_sum("marginal_session_time").alias("session_time_sums"))
+            .alias("session_time_sums")
+)
+window = Window().partitionBy("session").orderBy(desc("session_time_sums"))
+data_frame = data_frame.withColumn("rank", dense_rank().over(window))
 print(
   "Unique Users With The Longest Session Time are: \n",
-  data_frame.groupBy("session", "client_ip", "browser_ver").agg({"marginal_session_time": "sum"}).alias("session_time_sums").collect()
+  data_frame.where(col("rank") == 1)
+            .collect()
 )
